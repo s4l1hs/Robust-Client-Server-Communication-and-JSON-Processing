@@ -26,11 +26,16 @@ from urllib import error, request
 SERVER_URL = "https://student-server-production-528a.up.railway.app/submit-file"
 ORIGINAL_JSON_PATH = Path("original.json")
 MODIFIED_JSON_PATH = Path("modified.json")
+UNAVAILABLE_JSON_PATH = Path("modified_unavailable.json")
 LOG_FILE_PATH = Path("client.log")
 RETRY_DELAY_SECONDS = 10
 REQUEST_TIMEOUT_SECONDS = 15
 SERVER_OPEN_HOUR = 9
 SERVER_CLOSE_HOUR = 18
+
+
+class ServerUnavailableInterrupted(KeyboardInterrupt):
+    """Raised when user interrupts retries caused by HTTP 403."""
 
 
 def configure_logger(log_path: Path) -> logging.Logger:
@@ -129,6 +134,7 @@ def post_json_payload(url: str, payload: Dict[str, Any]) -> Tuple[int, bytes]:
 def submit_with_retry(url: str, json_path: Path, logger: logging.Logger) -> Dict[str, Any]:
     """Retry submission forever until a valid JSON response is received."""
     attempt = 0
+    retrying_due_to_403 = False
 
     while True:
         attempt += 1
@@ -174,6 +180,19 @@ def submit_with_retry(url: str, json_path: Path, logger: logging.Logger) -> Dict
             return response_data
 
         except error.HTTPError as http_error:
+            retrying_due_to_403 = http_error.code == 403
+            if retrying_due_to_403:
+                logger.error(
+                    "Attempt %d failed: Server unavailable (403 Forbidden).",
+                    attempt,
+                )
+                print(
+                    f"Attempt {attempt} failed: Server unavailable (403 Forbidden). "
+                    f"Retrying in {RETRY_DELAY_SECONDS} seconds..."
+                )
+                time.sleep(RETRY_DELAY_SECONDS)
+                continue
+
             logger.error(
                 "Attempt %d failed: HTTPError %s: %s",
                 attempt,
@@ -185,30 +204,42 @@ def submit_with_retry(url: str, json_path: Path, logger: logging.Logger) -> Dict
                 f"Retrying in {RETRY_DELAY_SECONDS} seconds..."
             )
         except error.URLError as url_error:
+            retrying_due_to_403 = False
             logger.error("Attempt %d failed: ConnectionError/URLError: %s", attempt, url_error)
             print(
                 f"Attempt {attempt} failed: connection problem. "
                 f"Retrying in {RETRY_DELAY_SECONDS} seconds..."
             )
         except socket.timeout as timeout_error:
+            retrying_due_to_403 = False
             logger.error("Attempt %d failed: Timeout: %s", attempt, timeout_error)
             print(
                 f"Attempt {attempt} failed: timeout. "
                 f"Retrying in {RETRY_DELAY_SECONDS} seconds..."
             )
         except json.JSONDecodeError as err:
+            retrying_due_to_403 = False
             logger.error("Attempt %d failed: local JSON parsing error: %s", attempt, err)
             print(
                 f"Attempt {attempt} failed: local JSON parsing error. "
                 f"Retrying in {RETRY_DELAY_SECONDS} seconds..."
             )
         except ValueError as err:
+            retrying_due_to_403 = False
             logger.error("Attempt %d failed: ValueError: %s", attempt, err)
             print(
                 f"Attempt {attempt} failed: value error. "
                 f"Retrying in {RETRY_DELAY_SECONDS} seconds..."
             )
-        except Exception as err:  
+        except KeyboardInterrupt as interruption:
+            if retrying_due_to_403:
+                logger.warning(
+                    "User interrupted while retrying because of 403 Forbidden."
+                )
+                raise ServerUnavailableInterrupted() from interruption
+            raise
+        except Exception as err:
+            retrying_due_to_403 = False
             logger.exception("Attempt %d failed with unexpected error: %s", attempt, err)
             print(
                 f"Attempt {attempt} failed: unexpected error. "
@@ -291,7 +322,30 @@ def main() -> None:
     save_json(personal_info, ORIGINAL_JSON_PATH)
     logger.info("Created and saved %s.", ORIGINAL_JSON_PATH)
 
-    response_data = submit_with_retry(SERVER_URL, ORIGINAL_JSON_PATH, logger)
+    try:
+        response_data = submit_with_retry(SERVER_URL, ORIGINAL_JSON_PATH, logger)
+    except KeyboardInterrupt as interruption:
+        if isinstance(interruption, ServerUnavailableInterrupted):
+            unavailable_payload = {
+                "status": "error",
+                "message": (
+                    "Server was unavailable (403 Forbidden). "
+                    "No modified data was received."
+                ),
+            }
+            save_json(unavailable_payload, UNAVAILABLE_JSON_PATH)
+            logger.warning(
+                "Saved unavailable response to %s after Ctrl+C during 403 retries.",
+                UNAVAILABLE_JSON_PATH,
+            )
+            print(
+                f"Server unavailable interruption noted. "
+                f"Saved {UNAVAILABLE_JSON_PATH}."
+            )
+            return
+
+        logger.warning("Client interrupted by user during submission.")
+        raise
 
     save_json(response_data, MODIFIED_JSON_PATH)
     logger.info("Saved server response to %s.", MODIFIED_JSON_PATH)

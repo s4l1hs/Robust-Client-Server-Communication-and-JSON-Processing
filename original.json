@@ -1,0 +1,10 @@
+{
+    "first_name": "Salih",
+    "last_name": "Sefer",
+    "age": 20,
+    "interests": [
+        "Cybersecurity",
+        "Python",
+        "Penetration Testing"
+    ]
+}

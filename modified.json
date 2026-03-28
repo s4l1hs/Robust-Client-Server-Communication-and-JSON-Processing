@@ -1,0 +1,16 @@
+{
+    "first_name": "Salih",
+    "last_name": "Sefer",
+    "age": 20,
+    "interests": [
+        "Cybersecurity",
+        "Python",
+        "Penetration Testing"
+    ],
+    "submission_type": "file",
+    "original_filename": "original.json",
+    "server_note": "Your file was received and processed by the server.",
+    "processed_at": "2026-03-28T09:59:12.230465+03:00",
+    "status": "processed",
+    "id": 12
+}
